@@ -306,6 +306,10 @@ function SourceOptions(props: {
         if (response) {
           console.log('Fetched data:', response)
           setData(response)
+          // prefer relationships if they exist
+          const hasRelationships =
+            response.people.some((p) => p.relationships?.length) || response.orgs.some((o) => o.relationships?.length)
+          setRelationshipType(hasRelationships ? 'relationships' : 'tags')
         }
       },
       (err) => {
