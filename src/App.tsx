@@ -1,6 +1,6 @@
 import { useSimpleStore } from '@hexafield/simple-store/react'
 import { useEffect } from 'react'
-import ForceGraph2D from 'react-force-graph-2d'
+import ForceGraph2D, { type LinkObject } from 'react-force-graph-2d'
 import './App.css'
 import { SchemaOrg, type Organization, type Person } from './schemas'
 
@@ -399,6 +399,24 @@ function App() {
           if (node.type === 'person') return 'blue'
           if (node.type === 'organization') return 'green'
           return 'gray'
+        }}
+        linkLabel={(link: LinkObject<NodeData, LinkData>) => {
+          const linkSource = link.source as NodeData
+          const linkTarget = link.target as NodeData
+          switch (link.type) {
+            case 'memberOf':
+              return linkSource.name + ' is a member of ' + linkTarget.name
+            case 'knows':
+              return linkSource.name + ' knows ' + linkTarget.name
+            case 'maintainer':
+              return linkSource.name + ' is a maintainer of ' + linkTarget.name
+            case 'softwareRequirement':
+              return linkSource.name + ' has a software requirement of ' + linkTarget.name
+            case 'tag':
+              return linkSource.name + ' relates to ' + linkTarget.name
+            default:
+              return 'Unknown Link'
+          }
         }}
         linkColor={(link) => {
           switch (link.type) {
