@@ -133,32 +133,134 @@ const getLinksFromTags = (people: Person[], orgs: Organization[]): LinkData[] =>
 type RawData = {
   people: Person[]
   orgs: Organization[]
+  done: boolean
 }
 
 type NetworkSelection = {
   label: string
-  value: () => Promise<RawData>
+  value: (abort: AbortSignal, onData: (data: RawData) => void, onError: (error: Error) => void) => void
+}
+
+type MurmurationsPaginationType<T = Person | Organization> = {
+  data: T[]
+  links: {
+    first?: string
+    self: string
+    next?: string
+    prev?: string
+    last?: string
+  }
+  meta: {
+    number_of_results: number
+    total_pages: number
+  }
 }
 
 const networks: NetworkSelection[] = [
   {
     label: 'World Wise Web',
-    value: async () => {
-      const [people, orgs] = (await Promise.all([
-        fetchJSON('/files/WWW%20Test%20Data%20-%20Person.json'),
-        fetchJSON('/files/WWW%20Test%20Data%20-%20Organization.json')
-      ])) as [Person[], Organization[]]
-      return { people, orgs }
+    value: async (abort: AbortSignal, callback: (data: RawData) => void, onError: (error: Error) => void) => {
+      try {
+        const [people, orgs] = (await Promise.all([
+          fetchJSON('/files/WWW%20Test%20Data%20-%20Person.json'),
+          fetchJSON('/files/WWW%20Test%20Data%20-%20Organization.json')
+        ])) as [Person[], Organization[]]
+        if (abort.aborted) return
+        callback({ people, orgs, done: true })
+      } catch (error) {
+        if (abort.aborted) return
+        onError(error as Error)
+      }
     }
   },
   {
     label: 'Murmurations Test Index',
-    value: async () => {
-      const [{ data: people }, { data: orgs }] = (await Promise.all([
-        fetchJSON('https://test-index.murmurations.network/v2/nodes?schema=people_schema-v0.1.0'),
-        fetchJSON('https://test-index.murmurations.network/v2/nodes?schema=organizations_schema-v1.0.0')
-      ])) as [{ data: Person[] }, { data: Organization[] }]
-      return { people, orgs }
+    value: async (abort: AbortSignal, callback: (data: RawData) => void, onError: (error: Error) => void) => {
+      const baseURL = 'https://test-index.murmurations.network/v2/nodes'
+      const peopleSchemaParam = `people_schema-v0.1.0`
+      const orgsSchemaParam = `organizations_schema-v1.0.0`
+
+      const maxPages = 5
+      let peoplePage = 1
+      let orgsPage = 1
+
+      const fetchPage = async <T = Person | Organization,>(url: string): Promise<MurmurationsPaginationType<T>> => {
+        try {
+          const response = await fetch(url)
+          if (!response.ok) throw new Error('Failed to fetch data')
+          return response.json()
+        } catch (error) {
+          onError(error as Error)
+          return {
+            data: [],
+            links: {
+              self: url
+            },
+            meta: {
+              number_of_results: 0,
+              total_pages: 0
+            }
+          }
+        }
+      }
+
+      // fetch first page to get total pages
+      const [peopleResponse, orgsResponse] = await Promise.all([
+        fetchPage<Person>(`${baseURL}?schema=${peopleSchemaParam}&page=${peoplePage}`),
+        fetchPage<Organization>(`${baseURL}?schema=${orgsSchemaParam}&page=${orgsPage}`)
+      ])
+
+      const totalPeoplePages = peopleResponse.meta.total_pages
+      const totalOrgsPages = orgsResponse.meta.total_pages
+
+      if (abort.aborted) return
+
+      if (totalOrgsPages === 1 && totalPeoplePages === 1) {
+        callback({
+          people: peopleResponse.data,
+          orgs: orgsResponse.data,
+          done: true
+        })
+        return
+      }
+
+      const people: Person[] = []
+      const orgs: Organization[] = []
+      people.push(...peopleResponse.data)
+      orgs.push(...orgsResponse.data)
+
+      callback({
+        people: peopleResponse.data,
+        orgs: orgsResponse.data,
+        done: false
+      })
+
+      // fetch remaining pages
+      while (
+        (peoplePage < totalPeoplePages || orgsPage < totalOrgsPages) &&
+        peoplePage < maxPages &&
+        orgsPage < maxPages
+      ) {
+        if (peoplePage < totalPeoplePages) {
+          peoplePage++
+          const nextPeopleResponse = await fetchPage<Person>(
+            `${baseURL}?schema=${peopleSchemaParam}&page=${peoplePage}`
+          )
+          if (abort.aborted) return
+          people.push(...nextPeopleResponse.data)
+          callback({ people, orgs, done: false })
+        }
+        if (orgsPage < totalOrgsPages) {
+          orgsPage++
+          const nextOrgsResponse = await fetchPage<Organization>(
+            `${baseURL}?schema=${orgsSchemaParam}&page=${orgsPage}`
+          )
+          if (abort.aborted) return
+          orgs.push(...nextOrgsResponse.data)
+          callback({ people, orgs, done: false })
+        }
+      }
+      callback({ people, orgs, done: true })
     }
   }
 ]
@@ -184,22 +286,28 @@ function App() {
   const [selectedNetwork, setNetwork] = useSimpleStore(networks[0])
   const [data, setData] = useSimpleStore({ nodes: [], links: [] } as GraphData)
   const [rawData, setRawData] = useSimpleStore({ people: [], orgs: [] } as { people: Person[]; orgs: Organization[] })
-  const [fetching, setFetching] = useSimpleStore(false)
   const [relationshipType, setRelationshipType] = useSimpleStore<'relationships' | 'tags'>('relationships')
   const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs'>('all')
 
   useEffect(() => {
-    const fetchData = async () => {
-      setFetching(true)
-      const response = await selectedNetwork.value()
-      if (response) {
-        console.log('Fetched data:', response)
-        setRawData(response)
+    const abortController = new AbortController()
+    selectedNetwork.value(
+      abortController.signal,
+      (response) => {
+        if (response) {
+          console.log('Fetched data:', response)
+          setRawData(response)
+        }
+      },
+      (err) => {
+        console.error('Fetch aborted or failed', err)
+        setRawData({ people: [], orgs: [] })
       }
-      setFetching(false)
+    )
+    return () => {
+      abortController.abort()
     }
-    fetchData()
-  }, [setRawData, setFetching, selectedNetwork])
+  }, [setRawData, selectedNetwork])
 
   useEffect(() => {
     const people = rawData.people || []
@@ -218,7 +326,7 @@ function App() {
       ],
       links: linkFunction(filteredPeople, filteredOrgs)
     })
-  }, [nodeFilter, rawData.people, rawData.orgs, relationshipType, setData])
+  }, [nodeFilter, rawData, relationshipType, setData])
 
   return (
     <div>
@@ -239,55 +347,48 @@ function App() {
           </option>
         ))}
       </select>
-      {/** Loading Indicator */}
-      {fetching && <p>Loading data...</p>}
-      {/** Data Summary */}
-      {!fetching && (
-        <>
-          <p>
-            Nodes: {data.nodes.length}, Links: {data.links.length}
-          </p>
-          <div>
-            <label>
-              <input
-                type="radio"
-                value="relationships"
-                checked={relationshipType === 'relationships'}
-                onChange={() => setRelationshipType('relationships')}
-              />
-              Relationships
-            </label>
-            <label>
-              <input
-                type="radio"
-                value="tags"
-                checked={relationshipType === 'tags'}
-                onChange={() => setRelationshipType('tags')}
-              />
-              Tags
-            </label>
-          </div>
-          <div>
-            <label>
-              <input type="radio" value="all" checked={nodeFilter === 'all'} onChange={() => setNodeFilter('all')} />
-              All Nodes
-            </label>
-            <label>
-              <input
-                type="radio"
-                value="people"
-                checked={nodeFilter === 'people'}
-                onChange={() => setNodeFilter('people')}
-              />
-              People Only
-            </label>
-            <label>
-              <input type="radio" value="orgs" checked={nodeFilter === 'orgs'} onChange={() => setNodeFilter('orgs')} />
-              Organizations Only
-            </label>
-          </div>
-        </>
-      )}
+      <p>
+        Nodes: {data.nodes.length}, Links: {data.links.length}
+      </p>
+      <div>
+        <label>
+          <input
+            type="radio"
+            value="relationships"
+            checked={relationshipType === 'relationships'}
+            onChange={() => setRelationshipType('relationships')}
+          />
+          Relationships
+        </label>
+        <label>
+          <input
+            type="radio"
+            value="tags"
+            checked={relationshipType === 'tags'}
+            onChange={() => setRelationshipType('tags')}
+          />
+          Tags
+        </label>
+      </div>
+      <div>
+        <label>
+          <input type="radio" value="all" checked={nodeFilter === 'all'} onChange={() => setNodeFilter('all')} />
+          All Nodes
+        </label>
+        <label>
+          <input
+            type="radio"
+            value="people"
+            checked={nodeFilter === 'people'}
+            onChange={() => setNodeFilter('people')}
+          />
+          People Only
+        </label>
+        <label>
+          <input type="radio" value="orgs" checked={nodeFilter === 'orgs'} onChange={() => setNodeFilter('orgs')} />
+          Organizations Only
+        </label>
+      </div>
       {/** Force Graph */}
       <ForceGraph2D
         graphData={data}
