@@ -282,62 +282,52 @@ type GraphData = {
   links: LinkData[]
 }
 
-function App() {
-  const [selectedNetwork, setNetwork] = useSimpleStore(networks[0])
-  const [data, setData] = useSimpleStore({ nodes: [], links: [] } as GraphData)
-  const [rawData, setRawData] = useSimpleStore({ people: [], orgs: [] } as { people: Person[]; orgs: Organization[] })
+function SourceOptions(props: {
+  network: NetworkSelection
+  onSelect: (network: NetworkSelection) => void
+  onData: (
+    networkLabel: string,
+    data: { people: Person[]; orgs: Organization[]; relationshipType: 'relationships' | 'tags' }
+  ) => void
+}) {
   const [relationshipType, setRelationshipType] = useSimpleStore<'relationships' | 'tags'>('relationships')
-  const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs'>('all')
+  const [data, setData] = useSimpleStore<{ people: Person[]; orgs: Organization[] }>({ people: [], orgs: [] })
 
   useEffect(() => {
     const abortController = new AbortController()
-    selectedNetwork.value(
+    props.network.value(
       abortController.signal,
       (response) => {
         if (response) {
           console.log('Fetched data:', response)
-          setRawData(response)
+          setData(response)
         }
       },
       (err) => {
         console.error('Fetch aborted or failed', err)
-        setRawData({ people: [], orgs: [] })
+        setData({ people: [], orgs: [] })
       }
     )
     return () => {
       abortController.abort()
     }
-  }, [setRawData, selectedNetwork])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.network])
 
   useEffect(() => {
-    const people = rawData.people || []
-    const orgs = rawData.orgs || []
-    if (people.length === 0 && orgs.length === 0) {
-      setData({ nodes: [], links: [] })
-      return
-    }
-    const linkFunction = relationshipType === 'relationships' ? getLinksFromRelationships : getLinksFromTags
-    const filteredPeople = nodeFilter === 'people' ? people : nodeFilter === 'orgs' ? [] : people
-    const filteredOrgs = nodeFilter === 'orgs' ? orgs : nodeFilter === 'people' ? [] : orgs
-    setData({
-      nodes: [
-        ...filteredPeople.map((p) => ({ id: p.profile_url as string, name: p.name, type: 'person' as const })),
-        ...filteredOrgs.map((o) => ({ id: o.profile_url as string, name: o.name, type: 'organization' as const }))
-      ],
-      links: linkFunction(filteredPeople, filteredOrgs)
-    })
-  }, [nodeFilter, rawData, relationshipType, setData])
+    props.onData(props.network.label, { people: data.people, orgs: data.orgs, relationshipType })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relationshipType, data.people, data.orgs])
 
   return (
-    <div>
-      <h1>Murmurations Viewer - Force Graph (2D)</h1>
+    <>
       {/** Dropdown */}
       <select
-        value={selectedNetwork.label}
+        value={props.network.label}
         onChange={(e) => {
           const network = networks.find((n) => n.label === e.target.value)
           if (network) {
-            setNetwork(network)
+            props.onSelect(network)
           }
         }}
       >
@@ -347,9 +337,6 @@ function App() {
           </option>
         ))}
       </select>
-      <p>
-        Nodes: {data.nodes.length}, Links: {data.links.length}
-      </p>
       <div>
         <label>
           <input
@@ -370,6 +357,90 @@ function App() {
           Tags
         </label>
       </div>
+    </>
+  )
+}
+
+function App() {
+  const [data, setData] = useSimpleStore({ nodes: [], links: [] } as GraphData)
+  const [sources, setSources] = useSimpleStore<NetworkSelection[]>([...networks])
+  const [rawData, setRawData] = useSimpleStore<
+    Record<string, { people: Person[]; orgs: Organization[]; relationshipType: 'relationships' | 'tags' }>
+  >({})
+
+  const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs'>('all')
+
+  useEffect(() => {
+    const nodes = [] as NodeData[]
+    const links = [] as LinkData[]
+    for (const source in rawData) {
+      const raw = rawData[source]
+      const people = raw.people as Person[]
+      const orgs = raw.orgs as Organization[]
+      const relationshipType = raw.relationshipType
+      const linkFunction = relationshipType === 'relationships' ? getLinksFromRelationships : getLinksFromTags
+      const filteredPeople = nodeFilter === 'people' ? people : nodeFilter === 'orgs' ? [] : people
+      const filteredOrgs = nodeFilter === 'orgs' ? orgs : nodeFilter === 'people' ? [] : orgs
+      nodes.push(
+        ...filteredPeople.map((p) => ({ id: p.profile_url as string, name: p.name, type: 'person' as const })),
+        ...filteredOrgs.map((o) => ({ id: o.profile_url as string, name: o.name, type: 'organization' as const }))
+      )
+      links.push(...linkFunction(filteredPeople, filteredOrgs))
+    }
+    setData({
+      nodes,
+      links
+    })
+  }, [nodeFilter, rawData, setData])
+
+  return (
+    <div>
+      <h1>Murmurations Viewer - Force Graph (2D)</h1>
+      {/* Add Source Button */}
+      <button
+        onClick={() => {
+          const newSource = networks[0]
+          setSources((prev) => [...prev, newSource])
+        }}
+      >
+        Add Source
+      </button>
+      {/* Row layout for all sources */}
+      {/** Source Options */}
+      <div style={{ display: 'flex', flexDirection: 'row', gap: '10px' }}>
+        {sources.map((source, index) => (
+          // column layout for each source
+          <div key={index} style={{ display: 'flex', flexDirection: 'column', marginBottom: '20px' }}>
+            <SourceOptions
+              key={index}
+              network={source}
+              onSelect={(network) => {
+                setSources((prev) => prev.map((s) => (s.label === source.label ? network : s)))
+              }}
+              onData={(networkLabel, data) => {
+                setRawData((prev) => ({ ...prev, [networkLabel]: data }))
+              }}
+            />
+            {/* Remove Source Button */}
+            <button
+              onClick={() => {
+                setSources((prev) => prev.filter((s) => s.label !== source.label))
+                setRawData((prev) => {
+                  const newData = { ...prev }
+                  delete newData[source.label]
+                  return newData
+                })
+              }}
+            >
+              Remove {source.label}
+            </button>
+          </div>
+        ))}
+      </div>
+      {/** Display Data Summary */}
+      <p>
+        Nodes: {data.nodes.length}, Links: {data.links.length}
+      </p>
       <div>
         <label>
           <input type="radio" value="all" checked={nodeFilter === 'all'} onChange={() => setNodeFilter('all')} />
