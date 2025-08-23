@@ -2,6 +2,7 @@ import { useSimpleStore } from '@hexafield/simple-store/react'
 import { useEffect } from 'react'
 import ForceGraph2D, { type LinkObject } from 'react-force-graph-2d'
 import './App.css'
+import { EditDrawer } from './EditDrawer'
 import { SchemaOrg, type Organization, type Person } from './schemas'
 
 // https://test-index.murmurations.network/v2/nodes?schema=people_schema-v0.1.0
@@ -306,6 +307,7 @@ function NetworkOptions(props: {
   const [relationshipType, setRelationshipType] = useSimpleStore<'relationships' | 'tags'>('relationships')
   const [data, setData] = useSimpleStore<{ people: Person[]; orgs: Organization[] }>({ people: [], orgs: [] })
   const [active, setActive] = useSimpleStore(true)
+  const [isEditing, setIsEditing] = useSimpleStore(false)
 
   useEffect(() => {
     const abortController = new AbortController()
@@ -338,10 +340,15 @@ function NetworkOptions(props: {
       orgs: data.orgs,
       relationshipType,
       active,
-      editing: false
+      editing: isEditing
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relationshipType, data.people, data.orgs, active])
+  }, [relationshipType, data.people, data.orgs, active, isEditing])
+
+  const handleUpdateData = (updatedPeople: Person[], updatedOrgs: Organization[]) => {
+    setData({ people: updatedPeople, orgs: updatedOrgs })
+    setIsEditing(false)
+  }
 
   return (
     <>
@@ -392,6 +399,19 @@ function NetworkOptions(props: {
           Tags
         </label>
       </div>
+      {/* Edit button */}
+      <button onClick={() => setIsEditing(!isEditing)} style={{ marginTop: '10px' }}>
+        {isEditing ? 'Close Editor' : 'Edit Network'}
+      </button>
+
+      <EditDrawer
+        isOpen={isEditing}
+        onClose={() => setIsEditing(false)}
+        networkLabel={props.network.label}
+        people={data.people}
+        organizations={data.orgs}
+        onUpdateData={handleUpdateData}
+      />
     </>
   )
 }
@@ -469,19 +489,6 @@ function App() {
                 setRawData((prev) => ({ ...prev, [networkLabel]: data }))
               }}
             />
-            {/* Edit button */}
-            {rawData[source.label] && (
-              <button
-                onClick={() => {
-                  setRawData((prev) => {
-                    prev[source.label].editing = !prev[source.label].editing
-                    return prev
-                  })
-                }}
-              >
-                {rawData[source.label].editing ? 'Save' : 'Edit'} {source.label}
-              </button>
-            )}
             {/* Remove Source Button */}
             <button
               onClick={() => {
