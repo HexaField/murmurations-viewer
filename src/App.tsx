@@ -282,16 +282,21 @@ type GraphData = {
   links: LinkData[]
 }
 
+type SourceDataType = {
+  people: Person[]
+  orgs: Organization[]
+  active: boolean
+  relationshipType: 'relationships' | 'tags'
+}
+
 function SourceOptions(props: {
   network: NetworkSelection
   onSelect: (network: NetworkSelection) => void
-  onData: (
-    networkLabel: string,
-    data: { people: Person[]; orgs: Organization[]; relationshipType: 'relationships' | 'tags' }
-  ) => void
+  onData: (networkLabel: string, data: SourceDataType) => void
 }) {
   const [relationshipType, setRelationshipType] = useSimpleStore<'relationships' | 'tags'>('relationships')
   const [data, setData] = useSimpleStore<{ people: Person[]; orgs: Organization[] }>({ people: [], orgs: [] })
+  const [active, setActive] = useSimpleStore(true)
 
   useEffect(() => {
     const abortController = new AbortController()
@@ -315,9 +320,9 @@ function SourceOptions(props: {
   }, [props.network])
 
   useEffect(() => {
-    props.onData(props.network.label, { people: data.people, orgs: data.orgs, relationshipType })
+    props.onData(props.network.label, { people: data.people, orgs: data.orgs, relationshipType, active })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relationshipType, data.people, data.orgs])
+  }, [relationshipType, data.people, data.orgs, active])
 
   return (
     <>
@@ -337,6 +342,17 @@ function SourceOptions(props: {
           </option>
         ))}
       </select>
+      {/** Active Toggle */}
+      <label>
+        <input
+          type="checkbox"
+          checked={active}
+          onChange={(e) => {
+            setActive(e.target.checked)
+          }}
+        />
+        Active
+      </label>
       <div>
         <label>
           <input
@@ -364,9 +380,7 @@ function SourceOptions(props: {
 function App() {
   const [data, setData] = useSimpleStore({ nodes: [], links: [] } as GraphData)
   const [sources, setSources] = useSimpleStore<NetworkSelection[]>([...networks])
-  const [rawData, setRawData] = useSimpleStore<
-    Record<string, { people: Person[]; orgs: Organization[]; relationshipType: 'relationships' | 'tags' }>
-  >({})
+  const [rawData, setRawData] = useSimpleStore<Record<string, SourceDataType>>({})
 
   const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs'>('all')
 
@@ -375,12 +389,13 @@ function App() {
     const links = [] as LinkData[]
     for (const source in rawData) {
       const raw = rawData[source]
+      if (!raw.active) continue
       const people = raw.people as Person[]
       const orgs = raw.orgs as Organization[]
       const relationshipType = raw.relationshipType
       const linkFunction = relationshipType === 'relationships' ? getLinksFromRelationships : getLinksFromTags
-      const filteredPeople = nodeFilter === 'people' ? people : nodeFilter === 'orgs' ? [] : people
-      const filteredOrgs = nodeFilter === 'orgs' ? orgs : nodeFilter === 'people' ? [] : orgs
+      const filteredPeople = nodeFilter === 'orgs' ? [] : people
+      const filteredOrgs = nodeFilter === 'people' ? [] : orgs
       nodes.push(
         ...filteredPeople.map((p) => ({ id: p.profile_url as string, name: p.name, type: 'person' as const })),
         ...filteredOrgs.map((o) => ({ id: o.profile_url as string, name: o.name, type: 'organization' as const }))
