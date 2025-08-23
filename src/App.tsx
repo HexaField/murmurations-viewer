@@ -313,7 +313,7 @@ function NetworkOptions(props: {
     const dataStr = JSON.stringify(dataArray, null, 2)
     const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr)
     const exportFileDefaultName = `${props.network.label.replace(/\s+/g, '_')}_${dataType}.json`
-    
+
     const linkElement = document.createElement('a')
     linkElement.setAttribute('href', dataUri)
     linkElement.setAttribute('download', exportFileDefaultName)
@@ -412,16 +412,10 @@ function NetworkOptions(props: {
       </div>
       {/* Download buttons */}
       <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
-        <button
-          onClick={() => downloadData(data.people, 'people')}
-          disabled={data.people.length === 0}
-        >
+        <button onClick={() => downloadData(data.people, 'people')} disabled={data.people.length === 0}>
           Download People
         </button>
-        <button
-          onClick={() => downloadData(data.orgs, 'organizations')}
-          disabled={data.orgs.length === 0}
-        >
+        <button onClick={() => downloadData(data.orgs, 'organizations')} disabled={data.orgs.length === 0}>
           Download Organizations
         </button>
       </div>
