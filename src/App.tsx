@@ -21,7 +21,7 @@ const fetchJSON = async (url: string): Promise<unknown> => {
   }
 }
 
-const getLinksFromRelationships = (people: Person[], orgs: Organization[]): LinkData[] => {
+const getLinksFromRelationships = (network: string, people: Person[], orgs: Organization[]): LinkData[] => {
   const links: LinkData[] = []
   const personMap = new Map(people.map((p) => [p.profile_url, p]))
   const orgMap = new Map(orgs.map((o) => [o.profile_url, o]))
@@ -33,7 +33,8 @@ const getLinksFromRelationships = (people: Person[], orgs: Organization[]): Link
           links.push({
             source: person.profile_url as string,
             target: org.profile_url as string,
-            type: 'memberOf'
+            type: 'memberOf',
+            network
           })
         }
       } else if (relationship.predicate_url === SchemaOrg.knows) {
@@ -42,7 +43,8 @@ const getLinksFromRelationships = (people: Person[], orgs: Organization[]): Link
           links.push({
             source: person.profile_url as string,
             target: otherPerson.profile_url as string,
-            type: 'knows'
+            type: 'knows',
+            network
           })
         }
       } else if (relationship.predicate_url === SchemaOrg.maintainer) {
@@ -51,7 +53,8 @@ const getLinksFromRelationships = (people: Person[], orgs: Organization[]): Link
           links.push({
             source: person.profile_url as string,
             target: project.profile_url as string,
-            type: 'maintainer'
+            type: 'maintainer',
+            network
           })
         }
       }
@@ -65,7 +68,8 @@ const getLinksFromRelationships = (people: Person[], orgs: Organization[]): Link
           links.push({
             source: org.profile_url as string,
             target: otherOrg.profile_url as string,
-            type: 'softwareRequirement'
+            type: 'softwareRequirement',
+            network
           })
         }
       }
@@ -83,7 +87,7 @@ const getLinksFromRelationships = (people: Person[], orgs: Organization[]): Link
 }
 
 // tags are arbitrary metadata strings, not defined in schema. we just need to create links based on common tags
-const getLinksFromTags = (people: Person[], orgs: Organization[]): LinkData[] => {
+const getLinksFromTags = (network: string, people: Person[], orgs: Organization[]): LinkData[] => {
   const links: LinkData[] = []
   const knownTags = new Map<string, string[]>() // map of tag to list of profile URLs
 
@@ -112,7 +116,8 @@ const getLinksFromTags = (people: Person[], orgs: Organization[]): LinkData[] =>
           links.push({
             source: urls[i],
             target: urls[j],
-            type: 'tag'
+            type: 'tag',
+            network
           })
         }
       }
@@ -269,12 +274,15 @@ type NodeData = {
   id: string
   name: string
   type: 'person' | 'organization'
+  network: string
+  profile: Person | Organization
 }
 
 type LinkData = {
   source: string
   target: string
   type: 'memberOf' | 'knows' | 'maintainer' | 'softwareRequirement' | 'tag'
+  network: string
 }
 
 type GraphData = {
@@ -282,17 +290,18 @@ type GraphData = {
   links: LinkData[]
 }
 
-type SourceDataType = {
+type NetworkDataType = {
   people: Person[]
   orgs: Organization[]
   active: boolean
+  editing: boolean
   relationshipType: 'relationships' | 'tags'
 }
 
-function SourceOptions(props: {
+function NetworkOptions(props: {
   network: NetworkSelection
   onSelect: (network: NetworkSelection) => void
-  onData: (networkLabel: string, data: SourceDataType) => void
+  onData: (networkLabel: string, data: NetworkDataType) => void
 }) {
   const [relationshipType, setRelationshipType] = useSimpleStore<'relationships' | 'tags'>('relationships')
   const [data, setData] = useSimpleStore<{ people: Person[]; orgs: Organization[] }>({ people: [], orgs: [] })
@@ -324,7 +333,13 @@ function SourceOptions(props: {
   }, [props.network])
 
   useEffect(() => {
-    props.onData(props.network.label, { people: data.people, orgs: data.orgs, relationshipType, active })
+    props.onData(props.network.label, {
+      people: data.people,
+      orgs: data.orgs,
+      relationshipType,
+      active,
+      editing: false
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relationshipType, data.people, data.orgs, active])
 
@@ -384,15 +399,15 @@ function SourceOptions(props: {
 function App() {
   const [data, setData] = useSimpleStore({ nodes: [], links: [] } as GraphData)
   const [sources, setSources] = useSimpleStore<NetworkSelection[]>([...networks])
-  const [rawData, setRawData] = useSimpleStore<Record<string, SourceDataType>>({})
+  const [rawData, setRawData] = useSimpleStore<Record<string, NetworkDataType>>({})
 
   const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs'>('all')
 
   useEffect(() => {
     const nodes = [] as NodeData[]
     const links = [] as LinkData[]
-    for (const source in rawData) {
-      const raw = rawData[source]
+    for (const network in rawData) {
+      const raw = rawData[network]
       if (!raw.active) continue
       const people = raw.people as Person[]
       const orgs = raw.orgs as Organization[]
@@ -401,16 +416,30 @@ function App() {
       const filteredPeople = nodeFilter === 'orgs' ? [] : people
       const filteredOrgs = nodeFilter === 'people' ? [] : orgs
       nodes.push(
-        ...filteredPeople.map((p) => ({ id: p.profile_url as string, name: p.name, type: 'person' as const })),
-        ...filteredOrgs.map((o) => ({ id: o.profile_url as string, name: o.name, type: 'organization' as const }))
+        ...filteredPeople.map((p) => ({
+          id: p.profile_url as string,
+          name: p.name,
+          type: 'person' as const,
+          network: network,
+          profile: p
+        })),
+        ...filteredOrgs.map((o) => ({
+          id: o.profile_url as string,
+          name: o.name,
+          type: 'organization' as const,
+          network: network,
+          profile: o
+        }))
       )
-      links.push(...linkFunction(filteredPeople, filteredOrgs))
+      links.push(...linkFunction(network, filteredPeople, filteredOrgs))
     }
     setData({
       nodes,
       links
     })
   }, [nodeFilter, rawData, setData])
+
+  const editActive = Object.values(rawData).some((source) => source.editing)
 
   return (
     <div>
@@ -430,7 +459,7 @@ function App() {
         {sources.map((source, index) => (
           // column layout for each source
           <div key={index} style={{ display: 'flex', flexDirection: 'column', marginBottom: '20px' }}>
-            <SourceOptions
+            <NetworkOptions
               key={index}
               network={source}
               onSelect={(network) => {
@@ -440,6 +469,19 @@ function App() {
                 setRawData((prev) => ({ ...prev, [networkLabel]: data }))
               }}
             />
+            {/* Edit button */}
+            {rawData[source.label] && (
+              <button
+                onClick={() => {
+                  setRawData((prev) => {
+                    prev[source.label].editing = !prev[source.label].editing
+                    return prev
+                  })
+                }}
+              >
+                {rawData[source.label].editing ? 'Save' : 'Edit'} {source.label}
+              </button>
+            )}
             {/* Remove Source Button */}
             <button
               onClick={() => {
@@ -484,13 +526,19 @@ function App() {
         graphData={data}
         width={900}
         height={600}
-        nodeLabel="name"
+        nodeLabel={(node: NodeData) => {
+          if (editActive && !rawData[node.network].editing) return ''
+          return node.name
+        }}
         nodeColor={(node) => {
+          // if an edit is active and it's not this node's source, return lightgray
+          if (editActive && !rawData[node.network].editing) return 'lightgray'
           if (node.type === 'person') return 'blue'
           if (node.type === 'organization') return 'green'
           return 'gray'
         }}
         linkLabel={(link: LinkObject<NodeData, LinkData>) => {
+          if (editActive && !rawData[link.network].editing) return ''
           const linkSource = link.source as NodeData
           const linkTarget = link.target as NodeData
           switch (link.type) {
@@ -509,6 +557,7 @@ function App() {
           }
         }}
         linkColor={(link) => {
+          if (editActive && !rawData[link.network].editing) return 'lightgray'
           switch (link.type) {
             case 'memberOf':
               return 'orange'
