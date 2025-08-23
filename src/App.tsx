@@ -309,6 +309,17 @@ function NetworkOptions(props: {
   const [active, setActive] = useSimpleStore(true)
   const [isEditing, setIsEditing] = useSimpleStore(false)
 
+  const downloadData = (dataArray: Person[] | Organization[], dataType: 'people' | 'organizations') => {
+    const dataStr = JSON.stringify(dataArray, null, 2)
+    const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr)
+    const exportFileDefaultName = `${props.network.label.replace(/\s+/g, '_')}_${dataType}.json`
+    
+    const linkElement = document.createElement('a')
+    linkElement.setAttribute('href', dataUri)
+    linkElement.setAttribute('download', exportFileDefaultName)
+    linkElement.click()
+  }
+
   useEffect(() => {
     const abortController = new AbortController()
     props.network.value(
@@ -399,6 +410,22 @@ function NetworkOptions(props: {
           Tags
         </label>
       </div>
+      {/* Download buttons */}
+      <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
+        <button
+          onClick={() => downloadData(data.people, 'people')}
+          disabled={data.people.length === 0}
+        >
+          Download People
+        </button>
+        <button
+          onClick={() => downloadData(data.orgs, 'organizations')}
+          disabled={data.orgs.length === 0}
+        >
+          Download Organizations
+        </button>
+      </div>
+
       {/* Edit button */}
       <button onClick={() => setIsEditing(!isEditing)} style={{ marginTop: '10px' }}>
         {isEditing ? 'Close Editor' : 'Edit Network'}
