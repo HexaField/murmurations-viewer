@@ -76,7 +76,11 @@ const getLinksFromRelationships = (people: Person[], orgs: Organization[]): Link
 }
 
 // tags are arbitrary metadata strings, not defined in schema. we need to create tag nodes and links to them
-const getTagNodesAndLinks = (people: Person[], orgs: Organization[], network: string): { nodes: NodeData[], links: LinkData[] } => {
+const getTagNodesAndLinks = (
+  people: Person[],
+  orgs: Organization[],
+  network: string
+): { nodes: NodeData[]; links: LinkData[] } => {
   const tagNodes: NodeData[] = []
   const links: LinkData[] = []
   const knownTags = new Set<string>()
@@ -160,11 +164,12 @@ const networks: NetworkSelection[] = [
     label: 'World Wise Web',
     value: async (abort: AbortSignal, callback: (data: RawData) => void, onError: (error: Error) => void) => {
       try {
-        const [people, orgs] = (await Promise.all([
-          fetchJSON('/files/WWW%20Test%20Data%20-%20Person.json'),
-          fetchJSON('/files/WWW%20Test%20Data%20-%20Organization.json')
-        ])) as [Person[], Organization[]]
+        const data = (await fetchJSON('/files/WWW%20Test%20Data.json')) as (Person | Organization)[]
         if (abort.aborted) return
+        const people = data.filter((item): item is Person => item.linked_schemas?.includes('people_schema-v0.1.0'))
+        const orgs = data.filter((item): item is Organization =>
+          item.linked_schemas?.includes('organizations_schema-v1.0.0')
+        )
         callback({ people, orgs, done: true })
       } catch (error) {
         if (abort.aborted) return
@@ -464,7 +469,7 @@ function App() {
             })
           }
         }
-        
+
         // Add organization nodes
         for (const org of filteredOrgs) {
           seenNodeIDs.add(org.profile_url as string)
@@ -483,10 +488,10 @@ function App() {
         if (showTags) {
           // Use all people and orgs for tag generation, regardless of node filter
           const tagData = getTagNodesAndLinks(people, orgs, network)
-          
+
           // Filter tag nodes based on nodeFilter
           const filteredTagNodes = nodeFilter === 'tags' || nodeFilter === 'all' ? tagData.nodes : []
-          
+
           // Add tag nodes
           for (const tagNode of filteredTagNodes) {
             seenNodeIDs.add(tagNode.id)
@@ -494,12 +499,12 @@ function App() {
               newNodesData.push(tagNode)
             }
           }
-          
+
           // Add tag links (only if both source and target nodes are visible)
           for (const link of tagData.links) {
             const sourceVisible = seenNodeIDs.has(link.source as string) || existingNodeIDs.has(link.source as string)
             const targetVisible = seenNodeIDs.has(link.target as string) || existingNodeIDs.has(link.target as string)
-            
+
             if (sourceVisible && targetVisible) {
               const linkKey = getLinkKey(link)
               seenLinkIDs.add(linkKey)
