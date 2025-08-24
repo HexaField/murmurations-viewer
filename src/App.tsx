@@ -75,44 +75,58 @@ const getLinksFromRelationships = (people: Person[], orgs: Organization[]): Link
   return links
 }
 
-// tags are arbitrary metadata strings, not defined in schema. we just need to create links based on common tags
-const getLinksFromTags = (people: Person[], orgs: Organization[]): LinkData[] => {
+// tags are arbitrary metadata strings, not defined in schema. we need to create tag nodes and links to them
+const getTagNodesAndLinks = (people: Person[], orgs: Organization[], network: string): { nodes: NodeData[], links: LinkData[] } => {
+  const tagNodes: NodeData[] = []
   const links: LinkData[] = []
-  const knownTags = new Map<string, string[]>() // map of tag to list of profile URLs
+  const knownTags = new Set<string>()
 
+  // Collect all unique tags
   people.forEach((person) => {
     person.tags?.forEach((tag) => {
-      if (!knownTags.has(tag)) {
-        knownTags.set(tag, [])
-      }
-      knownTags.get(tag)?.push(person.profile_url as string)
+      knownTags.add(tag)
     })
   })
 
   orgs.forEach((org) => {
     org.tags?.forEach((tag) => {
-      if (!knownTags.has(tag)) {
-        knownTags.set(tag, [])
-      }
-      knownTags.get(tag)?.push(org.profile_url as string)
+      knownTags.add(tag)
     })
   })
 
-  knownTags.forEach((urls) => {
-    if (urls.length > 1) {
-      for (let i = 0; i < urls.length; i++) {
-        for (let j = i + 1; j < urls.length; j++) {
-          links.push({
-            source: urls[i],
-            target: urls[j],
-            type: 'tag'
-          })
-        }
-      }
-    }
+  // Create tag nodes
+  knownTags.forEach((tag) => {
+    tagNodes.push({
+      id: `tag:${tag}`,
+      name: tag,
+      type: 'tag' as const,
+      network: network,
+      tag: tag
+    })
   })
 
-  return links
+  // Create links from entities to tags
+  people.forEach((person) => {
+    person.tags?.forEach((tag) => {
+      links.push({
+        source: person.profile_url as string,
+        target: `tag:${tag}`,
+        type: 'tag'
+      })
+    })
+  })
+
+  orgs.forEach((org) => {
+    org.tags?.forEach((tag) => {
+      links.push({
+        source: org.profile_url as string,
+        target: `tag:${tag}`,
+        type: 'tag'
+      })
+    })
+  })
+
+  return { nodes: tagNodes, links }
 }
 
 type RawData = {
@@ -265,6 +279,13 @@ type NodeData =
       network: string
       profile: Organization
     }
+  | {
+      id: string
+      name: string
+      type: 'tag'
+      network: string
+      tag: string
+    }
 
 type LinkData = {
   source: string | NodeData
@@ -405,7 +426,7 @@ function App() {
   const [sources, setSources] = useSimpleStore<NetworkSelection[]>([...networks])
   const [rawData, setRawData] = useSimpleStore<Record<string, NetworkDataType>>({})
 
-  const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs'>('all')
+  const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs' | 'tags'>('all')
   const [showRelationships, setShowRelationships] = useSimpleStore(true)
   const [showTags, setShowTags] = useSimpleStore(true)
 
@@ -427,8 +448,10 @@ function App() {
         if (!raw.active) continue
         const people = raw.people as Person[]
         const orgs = raw.orgs as Organization[]
-        const filteredPeople = nodeFilter === 'orgs' ? [] : people
-        const filteredOrgs = nodeFilter === 'people' ? [] : orgs
+        const filteredPeople = nodeFilter === 'orgs' || nodeFilter === 'tags' ? [] : people
+        const filteredOrgs = nodeFilter === 'people' || nodeFilter === 'tags' ? [] : orgs
+
+        // Add person nodes
         for (const person of filteredPeople) {
           seenNodeIDs.add(person.profile_url as string)
           if (!existingNodeIDs.has(person.profile_url as string)) {
@@ -441,6 +464,8 @@ function App() {
             })
           }
         }
+        
+        // Add organization nodes
         for (const org of filteredOrgs) {
           seenNodeIDs.add(org.profile_url as string)
           if (!existingNodeIDs.has(org.profile_url as string)) {
@@ -451,6 +476,37 @@ function App() {
               network: network,
               profile: org
             })
+          }
+        }
+
+        // Add tag nodes and links if tags are enabled
+        if (showTags) {
+          // Use all people and orgs for tag generation, regardless of node filter
+          const tagData = getTagNodesAndLinks(people, orgs, network)
+          
+          // Filter tag nodes based on nodeFilter
+          const filteredTagNodes = nodeFilter === 'tags' || nodeFilter === 'all' ? tagData.nodes : []
+          
+          // Add tag nodes
+          for (const tagNode of filteredTagNodes) {
+            seenNodeIDs.add(tagNode.id)
+            if (!existingNodeIDs.has(tagNode.id)) {
+              newNodesData.push(tagNode)
+            }
+          }
+          
+          // Add tag links (only if both source and target nodes are visible)
+          for (const link of tagData.links) {
+            const sourceVisible = seenNodeIDs.has(link.source as string) || existingNodeIDs.has(link.source as string)
+            const targetVisible = seenNodeIDs.has(link.target as string) || existingNodeIDs.has(link.target as string)
+            
+            if (sourceVisible && targetVisible) {
+              const linkKey = getLinkKey(link)
+              seenLinkIDs.add(linkKey)
+              if (!existingLinksIDs.has(linkKey)) {
+                newLinksData.push(link)
+              }
+            }
           }
         }
       }
@@ -474,19 +530,6 @@ function App() {
           prevData.nodes.filter((n) => n.type === 'organization').map((n) => n.profile)
         )
         for (const link of newLinksFromRelationships) {
-          const linkKey = getLinkKey(link)
-          seenLinkIDs.add(linkKey)
-          if (!existingLinksIDs.has(linkKey)) {
-            newLinksData.push(link)
-          }
-        }
-      }
-      if (showTags) {
-        const newLinksFromTags = getLinksFromTags(
-          prevData.nodes.filter((n) => n.type === 'person').map((n) => n.profile),
-          prevData.nodes.filter((n) => n.type === 'organization').map((n) => n.profile)
-        )
-        for (const link of newLinksFromTags) {
           const linkKey = getLinkKey(link)
           seenLinkIDs.add(linkKey)
           if (!existingLinksIDs.has(linkKey)) {
@@ -608,6 +651,10 @@ function App() {
           <input type="radio" value="orgs" checked={nodeFilter === 'orgs'} onChange={() => setNodeFilter('orgs')} />
           Organizations Only
         </label>
+        <label>
+          <input type="radio" value="tags" checked={nodeFilter === 'tags'} onChange={() => setNodeFilter('tags')} />
+          Tags Only
+        </label>
       </div>
       <div>
         <label>
@@ -633,7 +680,13 @@ function App() {
           if (editActive && !rawData[node.network].editing) return 'lightgray'
           if (node.type === 'person') return 'blue'
           if (node.type === 'organization') return 'green'
+          if (node.type === 'tag') return 'orange'
           return 'gray'
+        }}
+        nodeVal={(node) => {
+          // Make tag nodes smaller than regular nodes
+          if (node.type === 'tag') return 3
+          return 6
         }}
         linkLabel={(link: LinkObject<NodeData>) => {
           const linkSource = link.source as NodeData
@@ -648,8 +701,11 @@ function App() {
               return linkSource.name + ' is a maintainer of ' + linkTarget.name
             case 'softwareRequirement':
               return linkSource.name + ' has a software requirement of ' + linkTarget.name
-            case 'tag':
-              return linkSource.name + ' relates to ' + linkTarget.name
+            case 'tag': {
+              const tagNode = linkTarget.type === 'tag' ? linkTarget : linkSource
+              const entityNode = linkTarget.type === 'tag' ? linkSource : linkTarget
+              return entityNode.name + ' is tagged with ' + tagNode.name
+            }
             default:
               return 'Unknown Link'
           }
@@ -668,6 +724,8 @@ function App() {
               return 'red'
             case 'softwareRequirement':
               return 'cyan'
+            case 'tag':
+              return 'orange'
             default:
               return 'black'
           }
