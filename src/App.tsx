@@ -22,7 +22,7 @@ const fetchJSON = async (url: string): Promise<unknown> => {
   }
 }
 
-const getLinksFromRelationships = (network: string, people: Person[], orgs: Organization[]): LinkData[] => {
+const getLinksFromRelationships = (people: Person[], orgs: Organization[]): LinkData[] => {
   const links: LinkData[] = []
   const personMap = new Map(people.map((p) => [p.profile_url, p]))
   const orgMap = new Map(orgs.map((o) => [o.profile_url, o]))
@@ -34,8 +34,7 @@ const getLinksFromRelationships = (network: string, people: Person[], orgs: Orga
           links.push({
             source: person.profile_url as string,
             target: org.profile_url as string,
-            type: 'memberOf',
-            network
+            type: 'memberOf'
           })
         }
       } else if (relationship.predicate_url === SchemaOrg.knows) {
@@ -44,8 +43,7 @@ const getLinksFromRelationships = (network: string, people: Person[], orgs: Orga
           links.push({
             source: person.profile_url as string,
             target: otherPerson.profile_url as string,
-            type: 'knows',
-            network
+            type: 'knows'
           })
         }
       } else if (relationship.predicate_url === SchemaOrg.maintainer) {
@@ -54,8 +52,7 @@ const getLinksFromRelationships = (network: string, people: Person[], orgs: Orga
           links.push({
             source: person.profile_url as string,
             target: project.profile_url as string,
-            type: 'maintainer',
-            network
+            type: 'maintainer'
           })
         }
       }
@@ -69,26 +66,17 @@ const getLinksFromRelationships = (network: string, people: Person[], orgs: Orga
           links.push({
             source: org.profile_url as string,
             target: otherOrg.profile_url as string,
-            type: 'softwareRequirement',
-            network
+            type: 'softwareRequirement'
           })
         }
       }
     })
   })
-  // Ensure unique links
-  const uniqueLinks = new Map()
-  links.forEach((link) => {
-    const key = `${link.source}-${link.target}`
-    if (!uniqueLinks.has(key)) {
-      uniqueLinks.set(key, link)
-    }
-  })
-  return Array.from(uniqueLinks.values())
+  return links
 }
 
 // tags are arbitrary metadata strings, not defined in schema. we just need to create links based on common tags
-const getLinksFromTags = (network: string, people: Person[], orgs: Organization[]): LinkData[] => {
+const getLinksFromTags = (people: Person[], orgs: Organization[]): LinkData[] => {
   const links: LinkData[] = []
   const knownTags = new Map<string, string[]>() // map of tag to list of profile URLs
 
@@ -117,23 +105,14 @@ const getLinksFromTags = (network: string, people: Person[], orgs: Organization[
           links.push({
             source: urls[i],
             target: urls[j],
-            type: 'tag',
-            network
+            type: 'tag'
           })
         }
       }
     }
   })
 
-  // Ensure unique links
-  const uniqueLinks = new Map()
-  links.forEach((link) => {
-    const key = `${link.source}-${link.target}`
-    if (!uniqueLinks.has(key)) {
-      uniqueLinks.set(key, link)
-    }
-  })
-  return Array.from(uniqueLinks.values())
+  return links
 }
 
 type RawData = {
@@ -186,7 +165,7 @@ const networks: NetworkSelection[] = [
       const peopleSchemaParam = `people_schema-v0.1.0`
       const orgsSchemaParam = `organizations_schema-v1.0.0`
 
-      const maxPages = 5
+      const maxPages = 1
       let peoplePage = 1
       let orgsPage = 1
 
@@ -271,19 +250,27 @@ const networks: NetworkSelection[] = [
   }
 ]
 
-type NodeData = {
-  id: string
-  name: string
-  type: 'person' | 'organization'
-  network: string
-  profile: Person | Organization
-}
+type NodeData =
+  | {
+      id: string
+      name: string
+      type: 'person'
+      network: string
+      profile: Person
+    }
+  | {
+      id: string
+      name: string
+      type: 'organization'
+      network: string
+      profile: Organization
+    }
 
 type LinkData = {
-  source: string
-  target: string
+  source: string | NodeData
+  target: string | NodeData
   type: 'memberOf' | 'knows' | 'maintainer' | 'softwareRequirement' | 'tag'
-  network: string
+  // network: string
 }
 
 type GraphData = {
@@ -296,7 +283,6 @@ type NetworkDataType = {
   orgs: Organization[]
   active: boolean
   editing: boolean
-  relationshipType: 'relationships' | 'tags'
 }
 
 function NetworkOptions(props: {
@@ -304,7 +290,6 @@ function NetworkOptions(props: {
   onSelect: (network: NetworkSelection) => void
   onData: (networkLabel: string, data: NetworkDataType) => void
 }) {
-  const [relationshipType, setRelationshipType] = useSimpleStore<'relationships' | 'tags'>('relationships')
   const [data, setData] = useSimpleStore<{ people: Person[]; orgs: Organization[] }>({ people: [], orgs: [] })
   const [active, setActive] = useSimpleStore(true)
   const [isEditing, setIsEditing] = useSimpleStore(false)
@@ -328,10 +313,6 @@ function NetworkOptions(props: {
         if (response) {
           console.log('Fetched data:', response)
           setData(response)
-          // prefer relationships if they exist
-          const hasRelationships =
-            response.people.some((p) => p.relationships?.length) || response.orgs.some((o) => o.relationships?.length)
-          setRelationshipType(hasRelationships ? 'relationships' : 'tags')
         }
       },
       (err) => {
@@ -349,12 +330,11 @@ function NetworkOptions(props: {
     props.onData(props.network.label, {
       people: data.people,
       orgs: data.orgs,
-      relationshipType,
       active,
       editing: isEditing
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relationshipType, data.people, data.orgs, active, isEditing])
+  }, [data.people, data.orgs, active, isEditing])
 
   const handleUpdateData = (updatedPeople: Person[], updatedOrgs: Organization[]) => {
     setData({ people: updatedPeople, orgs: updatedOrgs })
@@ -390,26 +370,6 @@ function NetworkOptions(props: {
         />
         Active
       </label>
-      <div>
-        <label>
-          <input
-            type="radio"
-            value="relationships"
-            checked={relationshipType === 'relationships'}
-            onChange={() => setRelationshipType('relationships')}
-          />
-          Relationships
-        </label>
-        <label>
-          <input
-            type="radio"
-            value="tags"
-            checked={relationshipType === 'tags'}
-            onChange={() => setRelationshipType('tags')}
-          />
-          Tags
-        </label>
-      </div>
       {/* Download buttons */}
       <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
         <button onClick={() => downloadData(data.people, 'people')} disabled={data.people.length === 0}>
@@ -437,48 +397,124 @@ function NetworkOptions(props: {
   )
 }
 
+const getLinkKey = (link: LinkObject<NodeData, LinkData>) =>
+  `${typeof link.source === 'string' ? link.source : link.source.id}-${link.type}-${typeof link.target === 'string' ? link.target : link.target.id}`
+
 function App() {
   const [data, setData] = useSimpleStore({ nodes: [], links: [] } as GraphData)
   const [sources, setSources] = useSimpleStore<NetworkSelection[]>([...networks])
   const [rawData, setRawData] = useSimpleStore<Record<string, NetworkDataType>>({})
 
   const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs'>('all')
+  const [showRelationships, setShowRelationships] = useSimpleStore(true)
+  const [showTags, setShowTags] = useSimpleStore(true)
 
   useEffect(() => {
-    const nodes = [] as NodeData[]
-    const links = [] as LinkData[]
-    for (const network in rawData) {
-      const raw = rawData[network]
-      if (!raw.active) continue
-      const people = raw.people as Person[]
-      const orgs = raw.orgs as Organization[]
-      const relationshipType = raw.relationshipType
-      const linkFunction = relationshipType === 'relationships' ? getLinksFromRelationships : getLinksFromTags
-      const filteredPeople = nodeFilter === 'orgs' ? [] : people
-      const filteredOrgs = nodeFilter === 'people' ? [] : orgs
-      nodes.push(
-        ...filteredPeople.map((p) => ({
-          id: p.profile_url as string,
-          name: p.name,
-          type: 'person' as const,
-          network: network,
-          profile: p
-        })),
-        ...filteredOrgs.map((o) => ({
-          id: o.profile_url as string,
-          name: o.name,
-          type: 'organization' as const,
-          network: network,
-          profile: o
-        }))
-      )
-      links.push(...linkFunction(network, filteredPeople, filteredOrgs))
-    }
-    setData({
-      nodes,
-      links
+    /** Update nodes whilst preserving existing simulation */
+    setData((prevData) => {
+      const existingNodeIDs = new Set<string>(prevData.nodes.map((n) => n.id))
+      const existingLinksIDs = new Set<string>(prevData.links.map(getLinkKey))
+
+      const seenNodeIDs = new Set<string>()
+      const seenLinkIDs = new Set<string>()
+
+      // get all new data
+      const newNodesData = [] as NodeData[]
+      const newLinksData = [] as LinkData[]
+
+      for (const network in rawData) {
+        const raw = rawData[network]
+        if (!raw.active) continue
+        const people = raw.people as Person[]
+        const orgs = raw.orgs as Organization[]
+        const filteredPeople = nodeFilter === 'orgs' ? [] : people
+        const filteredOrgs = nodeFilter === 'people' ? [] : orgs
+        for (const person of filteredPeople) {
+          seenNodeIDs.add(person.profile_url as string)
+          if (!existingNodeIDs.has(person.profile_url as string)) {
+            newNodesData.push({
+              id: person.profile_url as string,
+              name: person.name,
+              type: 'person' as const,
+              network: network,
+              profile: person
+            })
+          }
+        }
+        for (const org of filteredOrgs) {
+          seenNodeIDs.add(org.profile_url as string)
+          if (!existingNodeIDs.has(org.profile_url as string)) {
+            newNodesData.push({
+              id: org.profile_url as string,
+              name: org.name,
+              type: 'organization' as const,
+              network: network,
+              profile: org
+            })
+          }
+        }
+      }
+
+      // remove old nodes
+      for (let i = prevData.nodes.length - 1; i >= 0; i--) {
+        const node = prevData.nodes[i]
+        if (!seenNodeIDs.has(node.id)) {
+          // this node is not in the new data, remove it
+          prevData.nodes.splice(i, 1)
+        }
+      }
+
+      // add new nodes and links
+      prevData.nodes.push(...newNodesData)
+
+      // create links from new nodes
+      if (showRelationships) {
+        const newLinksFromRelationships = getLinksFromRelationships(
+          prevData.nodes.filter((n) => n.type === 'person').map((n) => n.profile),
+          prevData.nodes.filter((n) => n.type === 'organization').map((n) => n.profile)
+        )
+        for (const link of newLinksFromRelationships) {
+          const linkKey = getLinkKey(link)
+          seenLinkIDs.add(linkKey)
+          if (!existingLinksIDs.has(linkKey)) {
+            newLinksData.push(link)
+          }
+        }
+      }
+      if (showTags) {
+        const newLinksFromTags = getLinksFromTags(
+          prevData.nodes.filter((n) => n.type === 'person').map((n) => n.profile),
+          prevData.nodes.filter((n) => n.type === 'organization').map((n) => n.profile)
+        )
+        for (const link of newLinksFromTags) {
+          const linkKey = getLinkKey(link)
+          seenLinkIDs.add(linkKey)
+          if (!existingLinksIDs.has(linkKey)) {
+            newLinksData.push(link)
+          }
+        }
+      }
+
+      // create links from filtered people and orgs
+      // remove old links
+      for (let i = prevData.links.length - 1; i >= 0; i--) {
+        const link = prevData.links[i]
+        const linkKey = getLinkKey(link)
+        if (!seenLinkIDs.has(linkKey)) {
+          // this link is not in the new data, remove it
+          prevData.links.splice(i, 1)
+        }
+      }
+
+      prevData.links.push(...newLinksData)
+
+      // return prevData
+      return {
+        nodes: prevData.nodes,
+        links: prevData.links
+      }
     })
-  }, [nodeFilter, rawData, setData])
+  }, [nodeFilter, rawData, setData, showRelationships, showTags])
 
   const editActive = Object.values(rawData).some((source) => source.editing)
 
@@ -497,11 +533,10 @@ function App() {
       {/* Row layout for all sources */}
       {/** Source Options */}
       <div style={{ display: 'flex', flexDirection: 'row', gap: '10px' }}>
-        {sources.map((source, index) => (
+        {sources.map((source) => (
           // column layout for each source
-          <div key={index} style={{ display: 'flex', flexDirection: 'column', marginBottom: '20px' }}>
+          <div key={source.label} style={{ display: 'flex', flexDirection: 'column', marginBottom: '20px' }}>
             <NetworkOptions
-              key={index}
               network={source}
               onSelect={(network) => {
                 setSources((prev) => prev.map((s) => (s.label === source.label ? network : s)))
@@ -549,6 +584,16 @@ function App() {
           Organizations Only
         </label>
       </div>
+      <div>
+        <label>
+          <input type="checkbox" checked={showRelationships} onChange={(e) => setShowRelationships(e.target.checked)} />
+          Show Relationships
+        </label>
+        <label>
+          <input type="checkbox" checked={showTags} onChange={(e) => setShowTags(e.target.checked)} />
+          Show Tags
+        </label>
+      </div>
       {/** Force Graph */}
       <ForceGraph2D
         graphData={data}
@@ -566,9 +611,9 @@ function App() {
           return 'gray'
         }}
         linkLabel={(link: LinkObject<NodeData, LinkData>) => {
-          if (editActive && !rawData[link.network].editing) return ''
           const linkSource = link.source as NodeData
           const linkTarget = link.target as NodeData
+          if ((editActive && rawData[linkSource.network]?.editing) || rawData[linkTarget.network]?.editing) return ''
           switch (link.type) {
             case 'memberOf':
               return linkSource.name + ' is a member of ' + linkTarget.name
@@ -585,7 +630,10 @@ function App() {
           }
         }}
         linkColor={(link) => {
-          if (editActive && !rawData[link.network].editing) return 'lightgray'
+          const linkSource = link.source as NodeData
+          const linkTarget = link.target as NodeData
+          if ((editActive && rawData[linkSource.network]?.editing) || rawData[linkTarget.network]?.editing)
+            return 'lightgray'
           switch (link.type) {
             case 'memberOf':
               return 'orange'
