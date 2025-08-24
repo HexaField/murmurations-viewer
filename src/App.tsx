@@ -1,8 +1,8 @@
 import { useSimpleStore } from '@hexafield/simple-store/react'
 import { useEffect } from 'react'
+import ForceGraph2D, { type LinkObject } from 'react-force-graph-2d'
 import './App.css'
 import { EditDrawer } from './EditDrawer'
-import ForceGraph2D, { type LinkObject } from './ForceGraph2D'
 import { SchemaOrg, type Organization, type Person } from './schemas'
 
 // https://test-index.murmurations.network/v2/nodes?schema=people_schema-v0.1.0
@@ -397,7 +397,7 @@ function NetworkOptions(props: {
   )
 }
 
-const getLinkKey = (link: LinkObject<NodeData>) =>
+const getLinkKey = (link: LinkObject<NodeData, LinkData>) =>
   `${typeof link.source === 'string' ? link.source : link.source.id}-${link.type}-${typeof link.target === 'string' ? link.target : link.target.id}`
 
 function App() {
