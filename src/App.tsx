@@ -508,6 +508,31 @@ function App() {
 
       prevData.links.push(...newLinksData)
 
+      let lastLinkIndex =
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        prevData.links.find((l) => typeof l.source !== 'string' && typeof l.target !== 'string')?.index ?? 0
+
+      for (const link of prevData.links) {
+        // ensure source and target are NodeData objects, and add index and __controlPoints if missing to fix bug in force-graph
+        if (typeof link.source === 'string') {
+          const sourceNode = prevData.nodes.find((n) => n.id === link.source)
+          const targetNode = prevData.nodes.find((n) => n.id === link.target)
+
+          link.source = sourceNode!
+          link.target = targetNode!
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          link.index = lastLinkIndex++
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          link.__controlPoints = null
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          link.__indexColor = '#a8001e'
+        }
+      }
+
       // return prevData
       return {
         nodes: prevData.nodes,
