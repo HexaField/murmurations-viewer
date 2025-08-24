@@ -1,7 +1,8 @@
 // converts CSV data to json format
 
 import cli from 'cli'
-import { readFileSync, writeFileSync } from 'fs'
+import * as fs from 'fs'
+import Papa from 'papaparse'
 
 // get the CSV file location from the CLI arguments using node cli
 
@@ -12,53 +13,70 @@ const options = cli.parse({
   output: ['o', 'Output file for json data', 'file', 'data.json']
 })
 
+// Function to preprocess CSV to fix common quote issues
+function preprocessCsv(csvData: string): string {
+  // Remove BOM if present
+  csvData = csvData.replace(/^\uFEFF/, '')
+
+  // Fix the specific coordinate issue: "Coordinates: [34.0522" should be "Coordinates: [34.0522]"
+  csvData = csvData.replace(/Coordinates: \[34\.0522"/g, 'Coordinates: [34.0522]"')
+
+  // Fix other similar coordinate patterns if they exist
+  csvData = csvData.replace(/Coordinates: \[([0-9.-]+)"/g, 'Coordinates: [$1]"')
+
+  return csvData
+}
+
 cli.main(async () => {
   try {
     const csvFile = options.csv
     const outputFile = options.output
 
-    // read the CSV file
-    const csvData = readFileSync(csvFile, 'utf8')
+    cli.status('Reading and preprocessing CSV file...')
 
-    // convert CSV to JSON
-    const lines = csvData.split('\n')
-    const headers = lines[0].split(',')
-    const jsonData = lines.slice(1).map((line) => {
-      const values = line.split(',')
-      return headers.reduce((obj, header, index) => {
-        const headerTrimmed = header.trim()
-        if (!headerTrimmed) return obj // skip empty headers
-        obj[headerTrimmed] = values[index].trim()
-        // if the value is a number, convert it to a number
-        if (!!obj[headerTrimmed] && !isNaN(Number(obj[headerTrimmed]))) {
-          obj[headerTrimmed] = Number(obj[headerTrimmed])
+    // Read the CSV file
+    const csvData = fs.readFileSync(csvFile, 'utf8')
+
+    // Preprocess to fix quote issues
+    const cleanedCsvData = preprocessCsv(csvData)
+
+    cli.status('Parsing CSV with Papa Parse...')
+
+    // Use Papa Parse which is more robust for malformed CSV
+    const parseResult = Papa.parse(cleanedCsvData, {
+      header: true, // First row contains headers
+      skipEmptyLines: true, // Skip empty lines
+      delimiter: ',', // Use comma as delimiter
+      quoteChar: '"', // Use double quotes
+      escapeChar: '"', // Escape quotes with double quotes
+      transformHeader: (header: string) => header.trim(), // Trim header whitespace
+      transform: (value: string) => {
+        // Clean up the cell values
+        if (typeof value === 'string') {
+          return value.trim()
         }
-        // if the value is a boolean, convert it to a boolean
-        if (obj[headerTrimmed] === 'true') {
-          obj[headerTrimmed] = true
-        } else if (obj[headerTrimmed] === 'false') {
-          obj[headerTrimmed] = false
-        }
-        // if the value is valid JSON, parse it
-        try {
-          if (
-            (obj[headerTrimmed] && obj[headerTrimmed].startsWith('{') && obj[headerTrimmed].endsWith('}')) ||
-            (obj[headerTrimmed].startsWith('[') && obj[headerTrimmed].endsWith(']'))
-          ) {
-            obj[headerTrimmed] = JSON.parse(obj[headerTrimmed])
-          }
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        } catch (e) {
-          // do nothing, keep the value as a string
-        }
-        return obj
-      }, {})
+        return value
+      }
     })
 
-    // write the JSON data to the output file
-    writeFileSync(outputFile, JSON.stringify(jsonData, null, 2))
+    if (parseResult.errors.length > 0) {
+      cli.error('Parsing errors found:')
+      parseResult.errors.forEach((error) => {
+        console.error(`Row ${error.row}: ${error.message}`)
+      })
+    }
+
+    cli.status('Writing JSON file...')
+
+    // Write the JSON output
+    fs.writeFileSync(outputFile, JSON.stringify(parseResult.data, null, 2))
 
     cli.ok(`CSV data successfully converted to JSON and saved to ${outputFile}`)
+    cli.info(`Processed ${parseResult.data.length} records`)
+
+    if (parseResult.errors.length > 0) {
+      cli.info(`${parseResult.errors.length} parsing errors encountered (see above)`)
+    }
   } catch (error) {
     cli.error(`Error: ${error.message}`)
   }
