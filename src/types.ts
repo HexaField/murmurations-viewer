@@ -12,21 +12,21 @@ export type NodeData =
       id: string
       name: string
       type: 'person'
-      network: string
+      networks: string[]
       profile: Person
     }
   | {
       id: string
       name: string
       type: 'organization'
-      network: string
+      networks: string[]
       profile: Organization
     }
   | {
       id: string
       name: string
       type: 'tag'
-      network: string
+      networks: string[]
       tag: string
     }
 

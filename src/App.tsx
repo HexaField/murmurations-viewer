@@ -106,7 +106,7 @@ const getTagNodesAndLinks = (
       id: `tag:${tag}`,
       name: tag,
       type: 'tag' as const,
-      network: network,
+      networks: [network],
       tag: tag
     })
   })
@@ -161,23 +161,125 @@ type MurmurationsPaginationType<T = Person | Organization> = {
   }
 }
 
+const flatMurmurationsMap =
+  (url: string) => async (abort: AbortSignal, callback: (data: RawData) => void, onError: (error: Error) => void) => {
+    try {
+      const data = (await fetchJSON(url)) as (Person | Organization)[]
+      if (abort.aborted) return
+      const people = data.filter((item): item is Person => item.linked_schemas?.includes('people_schema-v0.1.0'))
+      const orgs = data.filter((item): item is Organization =>
+        item.linked_schemas?.includes('organizations_schema-v1.0.0')
+      )
+      callback({ people, orgs, done: true })
+    } catch (error) {
+      if (abort.aborted) return
+      onError(error as Error)
+    }
+  }
+
+type KumuNode = {
+  Id: number
+  Type: string
+  Label: string
+  'First Name': string
+  'Last Name': string
+  Description: string
+  Segment: string
+  Image: string | null
+  'Project Name': string
+  'Mailchimp Opt-In': boolean
+  'Terms and Conditions': boolean
+  'Initial Date': string
+  'Last Date': string
+  'Creation date': string
+  [x: string]: string | number | boolean | null
+}
+
+type KumuConnection = {
+  Id: number
+  From: number
+  To: number
+  'Name From': string
+  'Name To': string
+  'Initial Date': string
+  'Last Date': string
+  Type: string
+  Weight: number
+  [x: string]: string | number
+}
+
+type KumuData = {
+  elements: KumuNode[]
+  connections: KumuConnection[]
+}
+
+// kumu only has people and connections, so we will map all nodes to people and not have organizations
+const convertKumuToMurmurations = (data: KumuData, domain: string, tags: string[]) => {
+  const people: Person[] = []
+
+  const peopleIdMap = new Map<string, Person>()
+
+  // create profiles
+  data.elements.forEach((node) => {
+    const person: Person = {
+      profile_url: `${domain}/person/${node.Id}`,
+      primary_url: `${domain}/person/${node.Id}`,
+      name: node.Label,
+      description: node.Description || undefined,
+      tags: [...tags],
+      image: node.Image || undefined,
+      relationships: [],
+      linked_schemas: []
+    }
+    peopleIdMap.set(node.Id.toString(), person)
+    people.push(person)
+  })
+
+  // create relationships
+  data.connections.forEach((connection) => {
+    try {
+      const fromPerson = peopleIdMap.get(connection.From.toString())
+      const toPerson = peopleIdMap.get(connection.To.toString())
+      if (fromPerson && toPerson) {
+        fromPerson.relationships!.push({
+          predicate_url: SchemaOrg.knows,
+          object_url: toPerson.profile_url as string
+        })
+      }
+    } catch (error) {
+      console.error('Error processing connection', connection, error)
+    }
+  })
+
+  return { people, orgs: [] as Organization[] }
+}
+
+const flatKumuMap =
+  (url: string, domain: string, tags: string[]) =>
+  async (abort: AbortSignal, callback: (data: RawData) => void, onError: (error: Error) => void) => {
+    try {
+      const data = (await fetchJSON(url)) as KumuData
+      if (abort.aborted) return
+      const { people, orgs } = convertKumuToMurmurations(data, domain, tags)
+      callback({ people, orgs, done: true })
+    } catch (error) {
+      if (abort.aborted) return
+      onError(error as Error)
+    }
+  }
+
 const networks: NetworkSelection[] = [
   {
     label: 'World Wise Web',
-    value: async (abort: AbortSignal, callback: (data: RawData) => void, onError: (error: Error) => void) => {
-      try {
-        const data = (await fetchJSON('/files/WWW%20Test%20Data.json')) as (Person | Organization)[]
-        if (abort.aborted) return
-        const people = data.filter((item): item is Person => item.linked_schemas?.includes('people_schema-v0.1.0'))
-        const orgs = data.filter((item): item is Organization =>
-          item.linked_schemas?.includes('organizations_schema-v1.0.0')
-        )
-        callback({ people, orgs, done: true })
-      } catch (error) {
-        if (abort.aborted) return
-        onError(error as Error)
-      }
-    }
+    value: flatMurmurationsMap('/files/WWW%20Test%20Data.json')
+  },
+  {
+    label: 'Limicon 2024',
+    value: flatKumuMap('/files/limicon2024.json', 'https://limicon2024.network', ['Limicon 2024'])
+  },
+  {
+    label: 'Limicon 2025',
+    value: flatKumuMap('/files/limicon2025.json', 'https://limicon2025.network', ['Limicon 2025'])
   },
   {
     label: 'Murmurations Test Index',
@@ -381,12 +483,12 @@ const getLinkKey = (link: LinkObject<NodeData, LinkData>) =>
 
 function App() {
   const [data, setData] = useSimpleStore({ nodes: [], links: [] } as GraphData)
-  const [sources, setSources] = useSimpleStore<NetworkSelection[]>([...networks])
+  const [sources, setSources] = useSimpleStore<NetworkSelection[]>([networks[0], networks[1], networks[2]])
   const [rawData, setRawData] = useSimpleStore<Record<string, NetworkDataType>>({})
 
-  const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs' | 'tags'>('all')
+  const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs'>('all')
   const [showRelationships, setShowRelationships] = useSimpleStore(true)
-  const [showTags, setShowTags] = useSimpleStore(true)
+  const [showTags, setShowTags] = useSimpleStore(false)
   const [showCircles, setShowCircles] = useSimpleStore(false)
 
   useEffect(() => {
@@ -398,6 +500,8 @@ function App() {
       const seenNodeIDs = new Set<string>()
       const seenLinkIDs = new Set<string>()
 
+      const seenNodeNames = new Map<string, Person | Organization>()
+
       // get all new data
       const newNodesData = [] as NodeData[]
       const newLinksData = [] as LinkData[]
@@ -407,18 +511,39 @@ function App() {
         if (!raw.active) continue
         const people = raw.people as Person[]
         const orgs = raw.orgs as Organization[]
-        const filteredPeople = nodeFilter === 'orgs' || nodeFilter === 'tags' ? [] : people
-        const filteredOrgs = nodeFilter === 'people' || nodeFilter === 'tags' ? [] : orgs
+        const filteredPeople = nodeFilter === 'orgs' ? [] : people
+        const filteredOrgs = nodeFilter === 'people' ? [] : orgs
 
         // Add person nodes
         for (const person of filteredPeople) {
+          if (seenNodeNames.has(person.name)) {
+            // merge network & relationships if duplicate name found
+            const existing = seenNodeNames.get(person.name)!
+            if (!existing.profile_url && person.profile_url) existing.profile_url = person.profile_url
+            if (!existing.primary_url && person.primary_url) existing.primary_url = person.primary_url
+            if (!existing.description && person.description) existing.description = person.description
+            if (!existing.image && person.image) existing.image = person.image
+            if (person.tags) {
+              existing.tags = Array.from(new Set([...(existing.tags ?? []), ...person.tags]))
+            }
+            if (person.relationships) {
+              existing.relationships = Array.from(new Set([...(existing.relationships ?? []), ...person.relationships]))
+            }
+            if (person.linked_schemas) {
+              existing.linked_schemas = Array.from(
+                new Set([...(existing.linked_schemas ?? []), ...person.linked_schemas])
+              )
+            }
+            continue
+          }
           seenNodeIDs.add(person.profile_url as string)
+          seenNodeNames.set(person.name, person)
           if (!existingNodeIDs.has(person.profile_url as string)) {
             newNodesData.push({
               id: person.profile_url as string,
               name: person.name,
               type: 'person' as const,
-              network: network,
+              networks: [network],
               profile: person
             })
           }
@@ -426,13 +551,14 @@ function App() {
 
         // Add organization nodes
         for (const org of filteredOrgs) {
+          seenNodeNames.set(org.name, org)
           seenNodeIDs.add(org.profile_url as string)
           if (!existingNodeIDs.has(org.profile_url as string)) {
             newNodesData.push({
               id: org.profile_url as string,
               name: org.name,
               type: 'organization' as const,
-              network: network,
+              networks: [network],
               profile: org
             })
           }
@@ -443,11 +569,8 @@ function App() {
           // Use all people and orgs for tag generation, regardless of node filter
           const tagData = getTagNodesAndLinks(people, orgs, network)
 
-          // Filter tag nodes based on nodeFilter
-          const filteredTagNodes = nodeFilter === 'tags' || nodeFilter === 'all' ? tagData.nodes : []
-
           // Add tag nodes
-          for (const tagNode of filteredTagNodes) {
+          for (const tagNode of tagData.nodes) {
             seenNodeIDs.add(tagNode.id)
             if (!existingNodeIDs.has(tagNode.id)) {
               newNodesData.push(tagNode)
@@ -611,10 +734,6 @@ function App() {
           <input type="radio" value="orgs" checked={nodeFilter === 'orgs'} onChange={() => setNodeFilter('orgs')} />
           Organizations Only
         </label>
-        <label>
-          <input type="radio" value="tags" checked={nodeFilter === 'tags'} onChange={() => setNodeFilter('tags')} />
-          Tags Only
-        </label>
       </div>
       <div>
         <label>
@@ -636,12 +755,20 @@ function App() {
         width={900}
         height={600}
         nodeLabel={(node: NodeData) => {
-          if (editActive && !rawData[node.network].editing) return ''
+          if (
+            editActive &&
+            !Object.entries(rawData).find(([network, data]) => node.networks.includes(network) && data.editing)
+          )
+            return ''
           return node.name
         }}
         nodeColor={(node) => {
           // if an edit is active and it's not this node's source, return lightgray
-          if (editActive && !rawData[node.network].editing) return 'lightgray'
+          if (
+            editActive &&
+            !Object.entries(rawData).find(([network, data]) => node.networks.includes(network) && data.editing)
+          )
+            return 'lightgray'
           if (node.type === 'person') return 'blue'
           if (node.type === 'organization') return 'green'
           if (node.type === 'tag') return 'orange'
@@ -655,7 +782,16 @@ function App() {
         linkLabel={(link: LinkObject<NodeData>) => {
           const linkSource = link.source as NodeData
           const linkTarget = link.target as NodeData
-          if ((editActive && rawData[linkSource.network]?.editing) || rawData[linkTarget.network]?.editing) return ''
+          if (
+            editActive &&
+            !(
+              Object.entries(rawData).find(
+                ([network, data]) => linkSource.networks.includes(network) && data.editing
+              ) ||
+              Object.entries(rawData).find(([network, data]) => linkTarget.networks.includes(network) && data.editing)
+            )
+          )
+            return ''
           switch (link.type) {
             case 'memberOf':
               return linkSource.name + ' is a member of ' + linkTarget.name
@@ -677,7 +813,15 @@ function App() {
         linkColor={(link) => {
           const linkSource = link.source as NodeData
           const linkTarget = link.target as NodeData
-          if ((editActive && rawData[linkSource.network]?.editing) || rawData[linkTarget.network]?.editing)
+          if (
+            editActive &&
+            !(
+              Object.entries(rawData).find(
+                ([network, data]) => linkSource.networks.includes(network) && data.editing
+              ) ||
+              Object.entries(rawData).find(([network, data]) => linkTarget.networks.includes(network) && data.editing)
+            )
+          )
             return 'lightgray'
           switch (link.type) {
             case 'memberOf':
