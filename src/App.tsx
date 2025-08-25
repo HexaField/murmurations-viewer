@@ -3,7 +3,9 @@ import { useEffect } from 'react'
 import ForceGraph2D, { type LinkObject } from 'react-force-graph-2d'
 import './App.css'
 import { EditDrawer } from './EditDrawer'
+import { useEnclosingCircles } from './EnclosingCircles'
 import { SchemaOrg, type Organization, type Person } from './schemas'
+import type { GraphData, LinkData, NetworkDataType, NodeData } from './types'
 
 // https://test-index.murmurations.network/v2/nodes?schema=people_schema-v0.1.0
 // https://test-index.murmurations.network/v2/nodes?schema=organizations_schema-v1.0.0
@@ -184,7 +186,7 @@ const networks: NetworkSelection[] = [
       const peopleSchemaParam = `people_schema-v0.1.0`
       const orgsSchemaParam = `organizations_schema-v1.0.0`
 
-      const maxPages = 1
+      const maxPages = 5
       let peoplePage = 1
       let orgsPage = 1
 
@@ -233,18 +235,13 @@ const networks: NetworkSelection[] = [
       people.push(...peopleResponse.data)
       orgs.push(...orgsResponse.data)
 
-      callback({
-        people: peopleResponse.data,
-        orgs: orgsResponse.data,
-        done: false
-      })
-
       // fetch remaining pages
       while (
         (peoplePage < totalPeoplePages || orgsPage < totalOrgsPages) &&
         peoplePage < maxPages &&
         orgsPage < maxPages
       ) {
+        callback({ people, orgs, done: false })
         if (peoplePage < totalPeoplePages) {
           peoplePage++
           const nextPeopleResponse = await fetchPage<Person>(
@@ -252,7 +249,6 @@ const networks: NetworkSelection[] = [
           )
           if (abort.aborted) return
           people.push(...nextPeopleResponse.data)
-          callback({ people, orgs, done: false })
         }
         if (orgsPage < totalOrgsPages) {
           orgsPage++
@@ -261,55 +257,12 @@ const networks: NetworkSelection[] = [
           )
           if (abort.aborted) return
           orgs.push(...nextOrgsResponse.data)
-          callback({ people, orgs, done: false })
         }
       }
       callback({ people, orgs, done: true })
     }
   }
 ]
-
-type NodeData =
-  | {
-      id: string
-      name: string
-      type: 'person'
-      network: string
-      profile: Person
-    }
-  | {
-      id: string
-      name: string
-      type: 'organization'
-      network: string
-      profile: Organization
-    }
-  | {
-      id: string
-      name: string
-      type: 'tag'
-      network: string
-      tag: string
-    }
-
-type LinkData = {
-  source: string | NodeData
-  target: string | NodeData
-  type: 'memberOf' | 'knows' | 'maintainer' | 'softwareRequirement' | 'tag'
-  // network: string
-}
-
-type GraphData = {
-  nodes: NodeData[]
-  links: LinkData[]
-}
-
-type NetworkDataType = {
-  people: Person[]
-  orgs: Organization[]
-  active: boolean
-  editing: boolean
-}
 
 function NetworkOptions(props: {
   network: NetworkSelection
@@ -338,7 +291,7 @@ function NetworkOptions(props: {
       (response) => {
         if (response) {
           console.log('Fetched data:', response)
-          setData(response)
+          setData({ people: response.people, orgs: response.orgs })
         }
       },
       (err) => {
@@ -360,7 +313,7 @@ function NetworkOptions(props: {
       editing: isEditing
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.people, data.orgs, active, isEditing])
+  }, [data, active, isEditing])
 
   const handleUpdateData = (updatedPeople: Person[], updatedOrgs: Organization[]) => {
     setData({ people: updatedPeople, orgs: updatedOrgs })
@@ -434,6 +387,7 @@ function App() {
   const [nodeFilter, setNodeFilter] = useSimpleStore<'all' | 'people' | 'orgs' | 'tags'>('all')
   const [showRelationships, setShowRelationships] = useSimpleStore(true)
   const [showTags, setShowTags] = useSimpleStore(true)
+  const [showCircles, setShowCircles] = useSimpleStore(false)
 
   useEffect(() => {
     /** Update nodes whilst preserving existing simulation */
@@ -589,6 +543,7 @@ function App() {
     })
   }, [nodeFilter, rawData, setData, showRelationships, showTags])
 
+  const enclosingCircles = useEnclosingCircles(data, showCircles)
   const editActive = Object.values(rawData).some((source) => source.editing)
 
   return (
@@ -670,6 +625,10 @@ function App() {
           <input type="checkbox" checked={showTags} onChange={(e) => setShowTags(e.target.checked)} />
           Show Tags
         </label>
+        <label>
+          <input type="checkbox" checked={showCircles} onChange={(e) => setShowCircles(e.target.checked)} />
+          Show Enclosing Circles
+        </label>
       </div>
       {/** Force Graph */}
       <ForceGraph2D
@@ -735,6 +694,7 @@ function App() {
               return 'black'
           }
         }}
+        {...enclosingCircles}
       />
     </div>
   )
